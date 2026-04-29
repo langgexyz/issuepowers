@@ -1,12 +1,5 @@
 {
   "name": "issuepowers-marketplace",
-  "owner": {
-    "name": "langgexyz"
-  },
-  "metadata": {
-    "description": "Issue-driven workflow framework on top of superpowers (开发工程化领域)",
-    "version": "0.1.0"
-  },
   "plugins": [
     {
       "name": "issuepowers",
@@ -14,9 +7,8 @@
         "source": "url",
         "url": "https://github.com/langgexyz/issuepowers.git"
       },
-      "description": "Issue-driven workflow framework on top of superpowers. Two user gates (理解 + 验证), Agent-autonomous in between. Includes /solve and /rollback commands, deliverable verification, and clean rollback playbook generation.",
-      "version": "0.1.0",
-      "strict": true
+      "description": "Issue-driven workflow on top of superpowers",
+      "version": "0.1.0"
     }
   ]
 }
