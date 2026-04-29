@@ -21,7 +21,63 @@ Top-level driver for issuepowers. Routes by mode.
 | `deploy-check` | After merge + cron deploy | P1 ✅ — calls `issuepowers:deliverable-check`, handles signals |
 | `fix-forward` | User reports minor validation failure | P1 ✅ — append user-validation-feedback to understanding, restart from plan |
 | `rollback` | `/rollback <id>` command | P1 ✅ — wraps `issuepowers:rollback` execute mode |
-| `resume` | SessionStart hook | P2 ⏳ — reads STATUS.md, reports in-flight |
+| `resume` | SessionStart hook | P1 ✅ — reads STATUS.md, surfaces "waiting on user" rows |
+
+---
+
+## STATUS.md Protocol
+
+所有 mode 共享的协调文件。
+
+### 路径
+
+`<project_root>/docs/superpowers/STATUS.md`
+
+### 格式
+
+```markdown
+# In-Flight Issues  (last updated: <ISO timestamp>)
+
+| Issue | Slug | State | Type | Risk | Waiting on |
+|---|---|---|---|---|---|
+| IJG6FV | scan-confirm | pending-validation | feature | low | User validation |
+| IJ9X12 | experiment-v2 | in-progress | refactor | high | Agent (D2 cross-issue check) |
+| IJFBUP | timeliness-warning | understanding-needs-info | feature | medium | User (answer blockers) |
+
+# Recently Done
+
+- IJFBUG actual-reviewer (done, deployed 2026-04-28, UAT pass)
+- IJF7K2 batch-import (rolled-back 2026-04-26, UAT 发现严重数据问题)
+```
+
+### 更新规约
+
+- **谁写**：每个发生状态转换的 mode 都要更新本文件。Mode 即写入者，不允许集中后处理（避免漏更新）
+- **写什么**：
+  - state 变化 → 更新该行的 State 列
+  - "Waiting on" 列粒度要够细：
+    - `Agent (in /solve)` — understanding 对话中
+    - `User (answer blockers)` — needs-info
+    - `Agent (Phase B writing-plans)` — plan 阶段
+    - `Agent (Phase D2 cross-issue check)` — self-review 中具体哪一项
+    - `Agent (deploy + check)` — 等 cron + deliverable-check
+    - `User validation` — pending UAT
+    - `User (rollback decision: cascade vs hot-fix)` — rollback 阻塞
+  - 终态（done / rolled-back）→ 把行从 In-Flight 段搬到 Recently Done 段
+- **何时写**：状态转换原子动作里同步写，不要等「稍后批量更新」
+- **不写**：
+  - 中间过程的细分进度（不用每分钟更新）
+  - 用户的私人备注（status.md 内部用，不暴露看板）
+
+### 并发
+
+多 Agent 进程不会同时写本文件 —— 各 mode 在各自 worktree 跑，但 `STATUS.md` 在项目根。当多 issue 同时推进，理论上写竞争存在，但实践极少（mode 内瞬时写一次就完）。
+
+如果未来变成瓶颈：append-only 行格式 + 离线整合。当前不优化。
+
+### 用户交互
+
+`resume` mode 是用户对 STATUS.md 的主要消费入口。用户也可以直接打开文件看（普通 markdown 表格人类可读）。
 
 ---
 
@@ -697,16 +753,80 @@ Continue through Phase C → D → merge → deploy-check as normal.
 
 ---
 
-## Mode: resume (P2 ⏳)
+## Mode: resume (P1)
 
-Triggered by SessionStart hook.
+Triggered automatically by SessionStart hook when a Claude Code session starts in an issuepowers-enabled project.
 
-### When P2 ships, this mode will:
+**Goal**: 把所有 in-flight issue 现状摆出来，让用户一眼看到「哪些等我处理」。绝不自动推进 issue。
 
-1. Read `STATUS.md`
-2. For each in-flight issue, summarize current state
-3. Surface "Waiting on you" rows prominently (the user's TODO list at session start)
-4. Do NOT auto-resume `understanding-needs-info` issues (they need user input)
+### Pre-conditions
+
+- SessionStart hook fired
+- Working directory is an issuepowers-enabled project (has `docs/superpowers/STATUS.md` or `docs/superpowers/issues/`)
+
+### Step 1 — Read STATUS.md
+
+Path: `docs/superpowers/STATUS.md`.
+
+If file doesn't exist:
+- Project is fresh / no issuepowers usage yet
+- Output: `📭 No in-flight issuepowers issues. Use /solve <gitee-id> to start.`
+- Exit (don't create empty STATUS.md proactively)
+
+### Step 2 — Parse In-Flight Issues
+
+Read the `# In-Flight Issues` table. For each row, extract: issue id / slug / state / type / risk / waiting on.
+
+### Step 3 — Classify by who's blocked
+
+Two buckets:
+
+**等用户**（必须用户介入才能推进）：
+- `understanding-needs-info` — Agent 需要用户补信息（blockers 在 status.md）
+- `pending-validation` — Agent 已交付，等用户验证
+- `rollback-blocked` — 回滚有依赖，等用户选 cascade vs hot-fix
+
+**Agent 在跑**（不需要用户介入，仅信息性）：
+- `in-progress` — Agent 自动跑实施 / 自审 / 部署 / check
+- `understanding-in-progress` — `/solve` 对话中（如果出现说明会话被中断，可能要用户重启）
+
+**已终止**（不展示在 in-flight，仅出现在 Recently Done）：
+- `done` / `rolled-back` / `split-into-children`（父）
+
+### Step 4 — Output 格式
+
+```
+📋 in-flight: <N> issues
+
+⏳ 等你处理 (<M>):
+  • IJG6FV scan-confirm — pending-validation
+    → 看 issues/IJG6FV/deliverable-report.md → 确认通过 / 写 user-validation-feedback / /rollback
+  • IJ9X12 experiment-v2 — understanding-needs-info
+    → blockers: <列出 blockers from status.md>
+
+🤖 Agent 在跑 (<K>):
+  • IJFBUP timeliness-warning — in-progress (Phase D2 跨 issue 冲突检查)
+  • IJ7HX2 scan-batch — in-progress (Phase C 实施中, task 4/9)
+```
+
+排序：等用户的优先（按风险高→低 + 进入该状态时间长→短），Agent 在跑的次之。
+
+如果两个 bucket 都为空（仅 done / rolled-back 历史）：
+```
+📋 No in-flight issues. <N> recently done. Use /solve <id> to start a new one.
+```
+
+### Step 5 — 不做的事
+
+绝对不做：
+- ❌ 自动调用 /solve、/rollback 或任何 mode 推进 issue
+- ❌ 修改 STATUS.md
+- ❌ 进入 worktree（resume 是只读视图）
+- ❌ 给用户施加压力（"该处理 IJG6FV 了"之类）—— 只陈述事实
+
+### Performance
+
+应该 < 1s。STATUS.md 很大（多 in-flight issue）也要快出，不要阻塞会话启动。
 
 ---
 

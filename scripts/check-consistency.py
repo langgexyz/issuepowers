@@ -56,6 +56,10 @@ for tpl in provides.get("templates", []):
     p = ROOT / f"templates/{tpl}"
     ok(f"template {tpl}") if p.exists() else fail(f"{tpl} → 缺 templates/{tpl}")
 
+for hook in provides.get("hooks", []):
+    p = ROOT / f"hooks/{hook}.md"
+    ok(f"hook {hook} → {p.relative_to(ROOT)}") if p.exists() else fail(f"hook {hook} → 缺 {p.relative_to(ROOT)}")
+
 
 # === Test 2: SKILL.md frontmatter ===
 section("Test 2: SKILL.md frontmatter 完整性")
