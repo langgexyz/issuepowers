@@ -19,7 +19,7 @@ Top-level driver for issuepowers. Routes by mode.
 | `implement` | After `solve` returns in-progress | P1 ✅ — drives superpowers 闭环 + cross-issue conflict + rollback rehearsal |
 | `merge` | After self-review pass | P1 ✅ — `.merge-lock` + squash + tag + submodule pointer |
 | `deploy-check` | After merge + cron deploy | P1 ✅ — calls `issuepowers:deliverable-check`, handles signals |
-| `fix-forward` | User reports minor UAT failure | P1 ✅ — append uat-feedback to understanding, restart from plan |
+| `fix-forward` | User reports minor validation failure | P1 ✅ — append user-validation-feedback to understanding, restart from plan |
 | `rollback` | `/rollback <id>` command | P1 ✅ — wraps `issuepowers:rollback` execute mode |
 | `resume` | SessionStart hook | P2 ⏳ — reads STATUS.md, reports in-flight |
 
@@ -594,7 +594,7 @@ deploy_env: dev | staging   # from project config
 
 | Signal | Action |
 |---|---|
-| `pass` | state = `pending-validation`; append `validated_at: <ts>` to status.md; STATUS.md "Waiting on" → "User UAT"; notify user |
+| `pass` | state = `pending-validation`; append `validated_at: <ts>` to status.md; STATUS.md "Waiting on" → "User validation"; notify user |
 | `fail` | **auto-trigger `rollback` mode** (no user gate — Agent 自我打脸) |
 | `incomplete-coverage` | Escalate; retain `in-progress` state; surface which behaviors lack tests |
 | `error` | Escalate (test infra broken); retain state |
@@ -609,9 +609,9 @@ For `pass`, notification format:
    State: pending-validation
    Report: docs/superpowers/issues/<id>/deliverable-report.md
 
-   Action needed: please UAT and respond.
+   Action needed: please validate and respond.
    - Pass: confirm verbally → state = done
-   - Minor failure: create issues/<id>/uat-feedback.md, fix-forward will resume
+   - Minor failure: create issues/<id>/user-validation-feedback.md, fix-forward will resume
    - Major failure: /rollback <id>
 ```
 
@@ -626,17 +626,17 @@ For `pass`, notification format:
 
 ## Mode: fix-forward (P1)
 
-Triggered by user creating `issues/<id>/uat-feedback.md` with type=minor.
+Triggered by user creating `issues/<id>/user-validation-feedback.md` with type=minor.
 
 ### Pre-conditions
 
 - state = `pending-validation`
-- `uat-feedback.md` exists and `failure_type` is marked `minor`
+- `user-validation-feedback.md` exists and `failure_type` is marked `minor`
 - User has decided fix-forward over rollback
 
 ### Step 1 — Validate inputs
 
-If `uat-feedback.md` missing or empty: ask user to provide specific feedback. Don't proceed without concrete signal.
+If `user-validation-feedback.md` missing or empty: ask user to provide specific feedback. Don't proceed without concrete signal.
 
 If marked `major`: refuse fix-forward, instruct user to use `/rollback <id>`.
 
@@ -646,22 +646,22 @@ Read `status.md.fix-forward-count` (default 0).
 
 If count ≥ 3:
 - **Refuse** fix-forward
-- Tell user: "已 fix-forward 3 次仍未通过 UAT。说明 understanding 本身有偏差或实施路径有结构问题。建议 /rollback <id>，必要时重新 /solve（修订 understanding）。"
+- Tell user: "已 fix-forward 3 次仍未通过用户验证。说明 understanding 本身有偏差或实施路径有结构问题。建议 /rollback <id>，必要时重新 /solve（修订 understanding）。"
 - Do NOT increment, do NOT change state. User must explicitly /rollback.
 
-### Step 3 — Append uat-feedback to understanding.md
+### Step 3 — Append user-validation-feedback to understanding.md
 
 **Append** (don't replace) a new section:
 
 ```markdown
-## UAT Feedback Iteration <N> — incremental requirement refinement
+## 用户验证反馈第 <N> 轮 — 需求增量修订
 
-<content from uat-feedback.md, organized as 关键行为 additions / clarifications>
+<内容来自 user-validation-feedback.md, 整理为关键行为的补充或澄清>
 
 (添加于 <ISO timestamp>，由 fix-forward 流程引入)
 ```
 
-Treats UAT feedback as discovered requirements that augment the contract, not contradict it. The original 关键行为 section remains the contract anchor.
+Treats user validation feedback as discovered requirements that augment the contract, not contradict it. The original 关键行为 section remains the contract anchor.
 
 ### Step 4 — Increment counter + history
 
@@ -669,7 +669,7 @@ Treats UAT feedback as discovered requirements that augment the contract, not co
 status.md:
   fix-forward-count: <prev + 1>
   history:
-    - { event: fix-forward-started, iteration: <N>, at: <ts>, source: uat-feedback.md }
+    - { event: fix-forward-started, iteration: <N>, at: <ts>, source: user-validation-feedback.md }
 ```
 
 ### Step 5 — State transition
@@ -682,7 +682,7 @@ Do NOT redo understanding — it's the (now augmented) contract anchor.
 
 Restart at implement mode Phase B (writing-plans):
 - Pass updated understanding.md to `superpowers:writing-plans`
-- New plan should explicitly address the UAT feedback items
+- New plan should explicitly address the user validation feedback items
 - Old acceptance tests remain; new ones may be added if new 关键行为 emerged from feedback
 
 Continue through Phase C → D → merge → deploy-check as normal.
@@ -693,7 +693,7 @@ Continue through Phase C → D → merge → deploy-check as normal.
 - ❌ Skip counter check (allows infinite fix-forward churn)
 - ❌ Re-run requirements-understanding (the issue is implementation drift, not misunderstanding)
 - ❌ Auto-decide fix-forward vs rollback (user must explicitly choose by what they create)
-- ❌ Continue with vague uat-feedback.md (concrete failure description required)
+- ❌ Continue with vague user-validation-feedback.md (concrete failure description required)
 
 ---
 

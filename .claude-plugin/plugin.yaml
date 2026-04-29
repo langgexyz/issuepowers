@@ -19,6 +19,6 @@ provides:
   templates:
     - understanding.md
     - split-proposal.md
-    - uat-feedback.md
+    - user-validation-feedback.md
     - deliverable-report.md
     - rollback.md

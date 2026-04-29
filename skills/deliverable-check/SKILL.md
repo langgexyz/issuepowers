@@ -143,7 +143,7 @@ Some bugs are "stop doing X" (e.g., stop sending duplicate emails). Test must ve
 
 E.g., "performance must not regress > 10%". This is hard to test deterministically. Either:
 - Convert to a concrete behavioral assertion (e.g., "p99 latency < 200ms on standard fixture")
-- Or drop from acceptance tests, accept it's only checked at UAT
+- Or drop from acceptance tests, accept it's only checked at user validation
 
 ### Flaky tests
 
