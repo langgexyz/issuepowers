@@ -11,8 +11,8 @@
     {
       "name": "issuepowers",
       "source": {
-        "source": "url",
-        "url": "https://github.com/langgexyz/issuepowers.git"
+        "source": "github",
+        "repo": "langgexyz/issuepowers"
       },
       "description": "Issue-driven workflow framework on top of superpowers. Two user gates (理解 + 验证), Agent-autonomous in between. Includes /solve and /rollback commands, deliverable verification, and clean rollback playbook generation.",
       "version": "0.1.0",
