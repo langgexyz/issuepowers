@@ -98,7 +98,7 @@ Don't dump all questions. Only ask what the issue body + comments don't cover.
 
 #### Ops / 配置类追问候选
 
-通常不需要走完整 issuepowers 流程。建议跟用户确认改用 issuepowers，或人手处理。
+通常不需要走完整 issuepowers 流程。建议跟用户确认改用 issuepowers，或开发者手动处理。
 
 ### Step 4 — Restate (Agent 用自己的话复述)
 
