@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""issuepowers 静态结构 + 一致性测试"""
-import os, re, sys, subprocess
+"""issuepowers 静态结构 + 跨文件引用一致性检查
+
+用途：维护 issuepowers 自身时跑一次，抓出文件引用断裂 / frontmatter 缺字段 /
+状态机不一致 / modes 表与 section 不对应等结构问题。
+
+不测业务行为，不测用户需求 —— 那是 deliverable-check skill 的职责。
+本脚本只关心 issuepowers 框架自己的内部一致性，是开发者维护工具。
+
+输出到 stdout，退出码 = FAIL 数。
+"""
+import re, sys
 from pathlib import Path
-from datetime import datetime
 
 # Minimal YAML-like parser for plugin.yaml structure (no yaml module dep)
 def parse_provides(text):
@@ -183,39 +191,5 @@ for label, pattern, hay in checks:
 print("\n" + "=" * 40)
 print(f"PASS: {len(PASS)}   FAIL: {len(FAIL)}   WARN: {len(WARN)}")
 print("=" * 40)
-
-# 写报告
-sha = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT).decode().strip()
-report_path = ROOT / "docs/TEST-REPORT.md"
-
-passes_md = "\n".join(f"- {x}" for x in PASS)
-fails_md = "\n".join(f"- {x}" for x in FAIL) if FAIL else "（无）"
-warns_md = "\n".join(f"- {x}" for x in WARN) if WARN else "（无）"
-
-report_path.write_text(f"""# issuepowers Test Report
-
-**Date**: {datetime.now().isoformat(timespec='seconds')}
-**Commit**: {sha}
-**Script**: scripts/test.py
-
-## Summary
-
-- ✅ PASS: {len(PASS)}
-- ❌ FAIL: {len(FAIL)}
-- ⚠️ WARN: {len(WARN)}
-
-## Failures
-
-{fails_md}
-
-## Warnings
-
-{warns_md}
-
-## All Passes
-
-{passes_md}
-""")
-print(f"Report: {report_path.relative_to(ROOT)}")
 
 sys.exit(len(FAIL))
