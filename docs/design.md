@@ -39,7 +39,9 @@ issuepowers **不重写** superpowers 的 skill，只 require 后增强。
                             ↓
                 通知人验收
                             ↓
-人 ─ 【Gate 2】验收 ──→ done  或  /rollback IJG6FV
+人 ─ 【Gate 2】验收 ──→ ✅ pass         → done
+                       ├─ ⚠️ fail-minor → in-progress（fix-forward, 重跑闭环）
+                       └─ ❌ fail-major → /rollback → rolled-back
 ```
 
 人介入只在两端，中间 Agent 不打扰。
@@ -50,7 +52,14 @@ issuepowers **不重写** superpowers 的 skill，只 require 后增强。
 
 ```
 主线：
-  in-progress → pending-validation → done | rolled-back
+  in-progress → pending-validation
+                    ├─ pass         → done
+                    ├─ fail-minor   → in-progress（fix-forward, 计数 +1）
+                    └─ fail-major   → rolled-back
+
+约束：
+  - fix-forward 计数 ≥ 3 → 强制走 rollback 分支
+  - deliverable-check 失败（实施期间）→ 不给 fix-forward，自动 rollback（理由见 §7）
 
 特殊：
   split-into-children       拆分后的父 issue
@@ -166,6 +175,14 @@ Agent 在 understanding 阶段识别可拆信号：
 输出 `deliverable-report.md`，5 分钟内出结果。
 
 失败 → 自动 /rollback（无需等人）。
+
+### 为什么 deliverable-check 失败不给 fix-forward
+
+deliverable-check 测的是 Agent 自己在 understanding.md 里写下的承诺。这一关失败 = **Agent 自我打脸**，信任已断。
+
+直接 rollback 让 Agent 从头跑闭环（understanding 也可能要修），比让 Agent 在「知道自己刚搞砸」的状态下打补丁更稳。
+
+UAT（人验证）失败则不同 —— 那是「需求 vs 实现」对不上，可能小事可能大事，由人决定 fix-forward 还是 rollback（见 §4 状态机）。
 
 ---
 
@@ -283,6 +300,7 @@ provides:
   templates:
     - understanding.md
     - split-proposal.md
+    - uat-feedback.md
     - deliverable-report.md
     - rollback.md
 ```
@@ -297,6 +315,7 @@ provides:
 │   ├─ status.md             ← 状态机锚点
 │   ├─ understanding.md      ← 必有
 │   ├─ split-proposal.md     ← 仅拆分时
+│   ├─ uat-feedback.md       ← 仅 UAT 失败走 fix-forward 时
 │   ├─ deliverable-report.md ← 部署后
 │   ├─ rollback.md           ← merge 前生成
 │   └─ rollback-report.md    ← 仅回滚时
