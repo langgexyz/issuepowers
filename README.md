@@ -37,14 +37,11 @@
 /plugin marketplace update issuepowers-marketplace
 ```
 
-### 替代：源码 alias 安装（开发者迭代）
-
-适合自己改 issuepowers 源码的场景，git pull 即生效：
+### 替代：源码安装
 
 ```bash
-git clone https://github.com/langgexyz/issuepowers.git ~/.local/share/issuepowers
-echo "alias claude='claude --plugin-dir ~/.local/share/issuepowers'" >> ~/.zshrc
-source ~/.zshrc
+git clone https://github.com/langgexyz/issuepowers.git
+claude --plugin-dir ./issuepowers
 ```
 
 ### 依赖
