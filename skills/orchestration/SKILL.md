@@ -16,10 +16,10 @@ Top-level driver for issuepowers. Routes by mode.
 | Mode | Trigger | Stage |
 |---|---|---|
 | `solve` | `/solve <id>` command | P0 ✅ — covers up to confirmed understanding |
-| `implement` | After `solve` returns in-progress | P1 ⏳ — drives superpowers 闭环 |
+| `implement` | After `solve` returns in-progress | P1 ✅ — drives superpowers 闭环 + cross-issue conflict + rollback rehearsal |
 | `merge` | After self-review pass | P1 ✅ — `.merge-lock` + squash + tag + submodule pointer |
-| `deploy-check` | After merge + cron deploy | P1 ⏳ — calls `issuepowers:deliverable-check` |
-| `fix-forward` | User reports minor UAT failure | P1 ⏳ — write `uat-feedback.md`, increment count, restart from plan |
+| `deploy-check` | After merge + cron deploy | P1 ✅ — calls `issuepowers:deliverable-check`, handles signals |
+| `fix-forward` | User reports minor UAT failure | P1 ✅ — append uat-feedback to understanding, restart from plan |
 | `rollback` | `/rollback <id>` command | P1 ✅ — wraps `issuepowers:rollback` execute mode |
 | `resume` | SessionStart hook | P2 ⏳ — reads STATUS.md, reports in-flight |
 
@@ -385,61 +385,315 @@ Thin orchestration wrapper around `issuepowers:rollback` skill.
 
 ---
 
-## Mode: implement (P1 ⏳)
+## Mode: implement (P1)
 
-Drives superpowers 闭环 from `in-progress` to `ready-for-merge`.
+Drives autonomous portion from `in-progress` to ready-for-merge.
 
-### When P1 ships, this mode will:
+### Pre-conditions
 
-1. Call `superpowers:brainstorming` (if needed beyond confirmed understanding — most issues skip)
-2. Call `superpowers:writing-plans`. **Critical augmentation**: ensure plan includes a task `"For each ## 关键行为 in understanding.md, write tests/acceptance/<id>/<n>-<slug>.spec.ts"`
-3. Call `superpowers:subagent-driven-development` to execute plan
-4. Call `superpowers:test-driven-development` for unit-level TDD discipline
-5. Self-review:
-   - Call `superpowers:requesting-code-review` + `superpowers:receiving-code-review`
-   - Plus issuepowers cross-issue conflict check (read all in-flight `status.md`, `git diff` overlap)
-   - Plus rollback rehearsal (scratch worktree: squash + revert + smoke)
-6. All-green → hand off to `merge` mode
+- state = `in-progress`
+- `understanding.md` confirmed
+- worktree + feature branches set up by solve mode
 
-### What the cross-issue conflict check does (when implemented)
+### Inputs
 
-- Read every `issues/*/status.md` with state ∈ { `in-progress`, `pending-validation` }
-- Determine each one's changed files (from `git diff develop...feature/<id>-<slug>`)
-- Compute pairwise intersection with current issue's diff
-- Non-empty intersection → flag conflict, do NOT proceed to merge until other issue is `done` / `rolled-back`
+```yaml
+gitee_id: <id>
+understanding_path: docs/superpowers/issues/<id>/understanding.md
+worktree_path: worktrees/<id>/
+branches:
+  backend: feature/<id>-<slug>
+  web: feature/<id>-<slug>
+project_root: <path>
+```
+
+### Phase A — Optional brainstorming
+
+Skip for most issues — understanding.md is usually sufficient.
+
+Invoke `superpowers:brainstorming` only when:
+
+- Issue is large / architectural in scope
+- understanding.md mentions "需要进一步设计"
+- User explicitly requests deeper exploration
+
+Output: `docs/superpowers/specs/<date>-<gitee_id>-<slug>-design.md`
+
+### Phase B — Plan (mandatory)
+
+Invoke `superpowers:writing-plans` skill, passing understanding.md (and spec.md if Phase A ran) as context.
+
+Output: `docs/superpowers/plans/<date>-<gitee_id>-<slug>-plan.md`
+
+**Critical augmentation**: ensure the plan includes this task block early:
+
+```markdown
+### Task: 写 acceptance tests
+
+For each `## 关键行为` line in understanding.md:
+  - Create `tests/acceptance/<gitee_id>/<n>-<short-slug>.<ext>` (extension by project: .spec.ts, .py, etc.)
+  - Test asserts the behavior holds against deployed env (not local mocks)
+
+For Bug 类:
+  - Test asserting原复现路径 produces the corrected behavior
+  - Test asserting bug-trigger condition does NOT produce buggy outcome
+
+For Refactor 类:
+  - For each「不能变的行为」, write a regression test
+```
+
+If `superpowers:writing-plans` doesn't auto-include this, manually add. Without these tests, deliverable-check will block at `incomplete-coverage`.
+
+### Phase C — Execute plan
+
+Invoke `superpowers:subagent-driven-development`. Use `superpowers:test-driven-development` for unit-level discipline.
+
+Don't proceed past plan execution until all checkboxes are done.
+
+### Phase D — Self-review (must ALL pass before merge)
+
+#### D1. Code review
+
+- `superpowers:requesting-code-review` (Agent prepares request: diff + intent)
+- `superpowers:receiving-code-review` (reviewer subagent gives structured feedback)
+- Iterate until reviewer approves
+
+#### D2. Cross-issue conflict check (issuepowers-specific)
+
+For each in-flight issue (state ∈ {`in-progress`, `pending-validation`}) **other than this**:
+
+```bash
+this_files=$(git -C <submodule> diff --name-only develop...feature/<gitee_id>-<slug> | sort)
+
+for other in $other_inflight_issues; do
+  other_files=$(git -C <submodule> diff --name-only develop...feature/$other_id-$other_slug | sort)
+  intersect=$(comm -12 <(echo "$this_files") <(echo "$other_files"))
+  if [ -n "$intersect" ]; then
+    echo "CONFLICT: $other_id touches the same files: $intersect"
+    BLOCK=1
+  fi
+done
+```
+
+If conflict found:
+
+- **BLOCK** — do not proceed to merge mode
+- Surface to user: "X and Y both touch <file list>. Coordinate which goes first."
+- Wait for resolution: either the other issue completes (state → done/rolled-back), or user decides serialization order
+
+#### D3. Rollback rehearsal (issuepowers-specific)
+
+In a scratch worktree:
+
+```bash
+git worktree add /tmp/rehearsal-<gitee_id> develop
+cd /tmp/rehearsal-<gitee_id>
+git merge --squash feature/<gitee_id>-<slug>
+git commit -m "rehearsal squash"
+SQUASH_SHA=$(git rev-parse HEAD)
+git revert $SQUASH_SHA --no-edit
+<project test command>      # smoke / acceptance tests on reverted state
+cd <project_root>
+git worktree remove /tmp/rehearsal-<gitee_id> --force
+```
+
+If smoke tests fail post-revert: **rollback path is broken**. Common causes:
+- Migration without downgrade
+- Delete-then-recreate that loses data
+- Schema change that's destructive on revert
+
+**BLOCK merge until rollback story is fixed.** False rollback safety > no safety.
+
+#### D4. Migration up/down check
+
+If this issue includes a migration:
+
+```bash
+cd <backend>
+flask db downgrade <rev-before-this-issue>   # must succeed cleanly
+flask db upgrade head                         # must succeed
+flask db downgrade <rev-before-this-issue>   # second cycle: still works?
+flask db upgrade head                         # back to head
+```
+
+Both directions must run cleanly. If downgrade fails or loses data unsafely: BLOCK, fix migration.
+
+#### D5. Final green checks
+
+- Type checks pass (`pnpm ts:check`, `mypy`, etc.)
+- Lint clean (`pnpm lint`, `flake8`, etc.)
+- Unit tests pass (`pnpm test`, `pytest`, etc.)
+- Acceptance test count ≥ count of `## 关键行为` lines in understanding.md
+- Diff size sanity: warn at > 1000 lines, **block at > 5000 lines** (scope ballooned, should have been split)
+
+### On all D phases pass
+
+Hand off to `merge` mode.
+
+### Failure handling
+
+| D phase | Fail | Action |
+|---|---|---|
+| D1 | Review feedback unaddressed | Iterate fix until reviewer approves |
+| D2 | Cross-issue conflict | Block, escalate to user for coordination |
+| D3 | Rollback rehearsal fails | Block, fix rollback story (often: add downgrade, or feature-flag the change) |
+| D4 | Migration not bidirectional | Block, add downgrade logic |
+| D5 | Greens not all green | Iterate fix |
+
+State stays `in-progress` throughout failure handling. Never advance to merge with unresolved D-phase issues.
+
+### Anti-patterns
+
+- ❌ Skip Phase B's acceptance test augmentation (will fail at deliverable-check Step 2)
+- ❌ Skip any D phase — they're the safety net before `.merge-lock` is touched
+- ❌ "Approximately passed" D phases — must be hard pass
+- ❌ Run merge mode without all D phases verified
 
 ---
 
-## Mode: deploy-check (P1 ⏳)
+## Mode: deploy-check (P1)
 
-Triggered by `merge` mode after Step 7 (submodule pointer push).
+Triggered automatically by `merge` mode after Step 7 (submodule pointer push).
 
-### When P1 ships, this mode will:
+### Pre-conditions
 
-1. Wait for deploy cron to redeploy (poll a deploy-completion stamp file or `/version` endpoint until it matches the new submodule SHA)
-2. Brief stabilization wait (~30-60s post-redeploy)
-3. Call `issuepowers:deliverable-check` skill
-4. Handle returned signal:
-   - `pass` → state = `pending-validation`, notify user
-   - `fail` → auto-trigger `rollback` mode
-   - `incomplete-coverage` → escalate (process violation), retain state
-   - `error` / `over-budget` → escalate, retain state
+- merge mode completed successfully
+- Project's `main` branch has a new submodule pointer commit
+- Deploy cron expected to pick it up
+
+### Step 1 — Wait for deploy
+
+Poll deploy completion. Mechanism depends on project (read project's CLAUDE.md):
+
+- **Stamp file**: deploy script writes `deploy/last-deployed-sha` after success → poll until matches
+- **Endpoint**: `GET /version` or `/deploy-info` → check `commit_sha` field
+- **Log tail**: SSH to deploy host, tail deploy log for completion marker
+
+Default: 30s polling, **10 min total timeout**. If timeout: escalate (cron broken or stuck), do NOT proceed.
+
+### Step 2 — Stabilization wait
+
+After deploy reports success, wait 30-60s. Apps may need:
+- Cache warm-up
+- Migration to apply (if not part of deploy)
+- Worker pool restart
+- CDN propagation
+
+### Step 3 — Call deliverable-check
+
+Invoke `issuepowers:deliverable-check` skill:
+
+```yaml
+gitee_id: <id>
+understanding_path: docs/superpowers/issues/<id>/understanding.md
+report_path: docs/superpowers/issues/<id>/deliverable-report.md
+deploy_env: dev | staging   # from project config
+```
+
+### Step 4 — Handle signal
+
+| Signal | Action |
+|---|---|
+| `pass` | state = `pending-validation`; append `validated_at: <ts>` to status.md; STATUS.md "Waiting on" → "User UAT"; notify user |
+| `fail` | **auto-trigger `rollback` mode** (no user gate — Agent 自我打脸) |
+| `incomplete-coverage` | Escalate; retain `in-progress` state; surface which behaviors lack tests |
+| `error` | Escalate (test infra broken); retain state |
+| `over-budget` | Escalate (tests too heavy); retain state |
+
+For `pass`, notification format:
+
+```
+✅ <gitee_id> <slug> deployed and verified.
+   <X/Y> acceptance tests pass (<duration>).
+
+   State: pending-validation
+   Report: docs/superpowers/issues/<id>/deliverable-report.md
+
+   Action needed: please UAT and respond.
+   - Pass: confirm verbally → state = done
+   - Minor failure: create issues/<id>/uat-feedback.md, fix-forward will resume
+   - Major failure: /rollback <id>
+```
+
+### Anti-patterns
+
+- ❌ Mark pending-validation without re-running tests against deployed env
+- ❌ "We tested locally so it's fine" shortcut
+- ❌ Continue past deploy timeout (escalate, not silent)
+- ❌ Auto-mark pass on `incomplete-coverage`
 
 ---
 
-## Mode: fix-forward (P1 ⏳)
+## Mode: fix-forward (P1)
 
-Triggered by user reporting **minor** failure at UAT (writes `uat-feedback.md`).
+Triggered by user creating `issues/<id>/uat-feedback.md` with type=minor.
 
-### When P1 ships, this mode will:
+### Pre-conditions
 
-1. Read `uat-feedback.md`
-2. Read `status.md.fix-forward-count`
-3. If count ≥ 3: refuse fix-forward, force user to choose `/rollback` (3 fixes failed = understanding偏差，应回滚重做)
-4. Increment count
-5. State → `in-progress` (re-entry)
-6. Append `uat-feedback.md` to `understanding.md` as `## UAT Feedback Iteration N — incremental requirement refinement`
-7. Restart from `implement` mode's plan stage. Note: do NOT redo understanding — the increment is added on top, understanding remains the contract anchor.
+- state = `pending-validation`
+- `uat-feedback.md` exists and `failure_type` is marked `minor`
+- User has decided fix-forward over rollback
+
+### Step 1 — Validate inputs
+
+If `uat-feedback.md` missing or empty: ask user to provide specific feedback. Don't proceed without concrete signal.
+
+If marked `major`: refuse fix-forward, instruct user to use `/rollback <id>`.
+
+### Step 2 — Validate counter
+
+Read `status.md.fix-forward-count` (default 0).
+
+If count ≥ 3:
+- **Refuse** fix-forward
+- Tell user: "已 fix-forward 3 次仍未通过 UAT。说明 understanding 本身有偏差或实施路径有结构问题。建议 /rollback <id>，必要时重新 /solve（修订 understanding）。"
+- Do NOT increment, do NOT change state. User must explicitly /rollback.
+
+### Step 3 — Append uat-feedback to understanding.md
+
+**Append** (don't replace) a new section:
+
+```markdown
+## UAT Feedback Iteration <N> — incremental requirement refinement
+
+<content from uat-feedback.md, organized as 关键行为 additions / clarifications>
+
+(添加于 <ISO timestamp>，由 fix-forward 流程引入)
+```
+
+Treats UAT feedback as discovered requirements that augment the contract, not contradict it. The original 关键行为 section remains the contract anchor.
+
+### Step 4 — Increment counter + history
+
+```yaml
+status.md:
+  fix-forward-count: <prev + 1>
+  history:
+    - { event: fix-forward-started, iteration: <N>, at: <ts>, source: uat-feedback.md }
+```
+
+### Step 5 — State transition
+
+state = `in-progress`. Update STATUS.md row "Waiting on" → "Agent (fix-forward iteration N)".
+
+### Step 6 — Restart from implement mode Phase B
+
+Do NOT redo understanding — it's the (now augmented) contract anchor.
+
+Restart at implement mode Phase B (writing-plans):
+- Pass updated understanding.md to `superpowers:writing-plans`
+- New plan should explicitly address the UAT feedback items
+- Old acceptance tests remain; new ones may be added if new 关键行为 emerged from feedback
+
+Continue through Phase C → D → merge → deploy-check as normal.
+
+### Anti-patterns
+
+- ❌ Replace understanding.md (loses contract history)
+- ❌ Skip counter check (allows infinite fix-forward churn)
+- ❌ Re-run requirements-understanding (the issue is implementation drift, not misunderstanding)
+- ❌ Auto-decide fix-forward vs rollback (user must explicitly choose by what they create)
+- ❌ Continue with vague uat-feedback.md (concrete failure description required)
 
 ---
 
@@ -452,7 +706,7 @@ Triggered by SessionStart hook.
 1. Read `STATUS.md`
 2. For each in-flight issue, summarize current state
 3. Surface "Waiting on you" rows prominently (the user's TODO list at session start)
-4. Do NOT auto-resume `understanding-needs-info` issues (they need user input that may not be forthcoming yet)
+4. Do NOT auto-resume `understanding-needs-info` issues (they need user input)
 
 ---
 
