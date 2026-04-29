@@ -7,7 +7,23 @@
 
 ## 一、定位
 
-issuepowers 是基于 **Gitee issue** 的工作流框架，运行在 [superpowers](https://github.com/obra/superpowers) 之上。
+issuepowers 是基于 **Gitee issue** 的**开发工程化** issue 解决框架，运行在 [superpowers](https://github.com/obra/superpowers) 之上。
+
+### 范围
+
+| ✅ 在范围内（开发工程化） | ❌ 在范围外 |
+|---|---|
+| 代码改动（前端/后端/共享库/脚本） | 纯文档撰写（lark-doc / lark-wiki）|
+| 构建 / 编译 / 打包 | 沟通协调（lark-mail / lark-im）|
+| 测试（单元/集成/e2e/acceptance） | 业务调研 / 客户走访 |
+| DB schema 变更 + migration | 设计资源（mockup / brand）|
+| CI / CD / 部署 | 数据分析 / 报表 |
+| 运维配置 / IaC | 业务流程改造 |
+| 代码 review / 合规 | |
+
+边界是「**最终产出是 git 可追踪的工程产物**」。如果某 issue 既要写代码也要发邮件，issuepowers 处理代码部分，邮件部分用户自己用 lark-mail 跟进 —— 不混管。
+
+### 跟 superpowers 对比
 
 | 维度 | superpowers | issuepowers |
 |---|---|---|
@@ -56,6 +72,12 @@ issuepowers **不重写** superpowers 的 skill，只 require 后增强。
    | `git branch -D <非 issuepowers 自建分支>` | `git branch -d` （拒绝未合并即可） |
 
    **理由**：automation 跑破坏性命令 = 一旦设计有 bug 就丢用户工作，reflog 恢复对用户不透明。安全替代成本不高（revert 多一个 commit，但历史完整可审计）。
+
+8. **项目级配置驱动 + plugin 零状态**：项目特定信息（栈、模块、命令、部署机制、测试命令）由 consuming project 仓库内 `.issuepowers/config.yaml` 声明，issuepowers plugin 自身不存任何项目细节。skill 引用 config 抽象项（`<config.migration.downgrade>`），不硬编码具体命令（`flask db downgrade`）。
+
+   配置不齐 / 字段无效 → Agent 向用户索取（同 understanding 阶段「不确定就问」原则）。
+
+   **当前 v0 状态**：所有 skill 仍硬编码 process-manage-ai-workflow 栈作为参考实例，**只服务该项目**。v1 引入 config 后逐项替换。详见 §17。
 
 ---
 
@@ -405,6 +427,14 @@ provides:
 - [ ] MEMORY.md 起草（风险判断 + 自审清单）
 - [ ] 拿一个低风险 issue 做试金石
 
+### P3 — config 驱动 / 通用化（v0 → v1, ~2 天）
+
+- [ ] 完整 `.issuepowers/config.yaml` schema 文档（详见 §17）
+- [ ] `/issuepowers init` 命令（自动探测 + 用户校对）
+- [ ] 各 skill 重构：替换 hardcoded `backend` / `web` / `flask db` 等为 `<config.X>` 占位
+- [ ] 模板更新：`rollback.md` 等用 dict-by-module，去掉固定 backend / web 字段
+- [ ] 配置缺失时的索取流程（同 understanding 阶段「不确定就问用户」）
+
 ---
 
 ## 十五、待决问题
@@ -425,3 +455,125 @@ provides:
 4. 验证：develop 分支干净、submodule 指针回退、migration 已 down、deliverable-check 不再产出 fail
 
 跑通 = issuepowers 真正立起来。
+
+---
+
+## 十七、项目 config schema 与 v0/v1 升级路径
+
+> **v0 (当前)**：硬编码 process-manage-ai-workflow 栈，**只服务该项目**
+> **v1 (规划)**：config-driven，任意符合 schema 的开发工程化项目都可接入
+
+### Why config
+
+issuepowers 是 framework 不是 tool —— framework 不该假设具体技术栈。当前 skill 里出现的 `flask db downgrade` / `pnpm test` / `cron poll` 都是某一特定项目的细节。下一个用 issuepowers 的项目可能完全不同（Go + Knex + GitHub Actions / Java + Liquibase + K8s）。config 把项目细节 externalize 到 consuming project，skill 内部用抽象项。
+
+### 位置（项目仓库内）
+
+```
+<consuming-project>/
+└─ .issuepowers/
+   └─ config.yaml    ← 项目级配置, 跟代码一起 git 版本化
+```
+
+跟 `.claude/`、`.superpowers/`、`.github/` 同 pattern。**issuepowers plugin 自身零状态**。
+
+### Schema 草案 (v1)
+
+```yaml
+# .issuepowers/config.yaml
+
+modules:
+  - name: backend
+    role: backend          # backend / frontend / shared / ops / docs
+    path: process-manage-backend
+    repo_kind: submodule   # submodule / subdir / external-repo
+    branch_pattern: "feature/{issue_id}-{slug}"
+    base_branch: develop
+  - name: web
+    role: frontend
+    path: process-manage-web
+    repo_kind: submodule
+    branch_pattern: "feature/{issue_id}-{slug}"
+    base_branch: develop
+
+migration:
+  enabled: true
+  module: backend                              # 在哪个 module 跑
+  upgrade: "flask db upgrade head"
+  downgrade: "flask db downgrade {revision}"
+  current: "flask db current"
+
+deploy:
+  mechanism: cron-poll                         # cron-poll / ci / manual / k8s
+  poll_endpoint: "{base_url}/version"
+  poll_field: "commit_sha"
+  poll_timeout_sec: 600
+
+tests:
+  type_check: "pnpm ts:check"
+  lint: "pnpm lint"
+  unit: "pnpm test"
+  acceptance_dir: "tests/acceptance/{issue_id}"
+  acceptance_run: "pnpm test:e2e --grep {issue_id}"
+
+commit_convention:
+  scope_pattern: "{issue_id}"
+  types: [feat, fix, refactor, test, docs, chore, perf, style, build, ci, revert, merge]
+```
+
+### Onboarding 流程（v1, P3 命令）
+
+```
+开发者: /issuepowers init
+   ↓
+Agent 自动探测项目栈:
+- requirements.txt / package.json / go.mod → backend 框架
+- .github/workflows / deploy/*.sh → deploy 机制
+- alembic.ini / migrations/ → migration 工具
+- jest.config / playwright.config → test 框架
+   ↓
+Agent 草拟 .issuepowers/config.yaml, 标出检测结果 + 不确定项
+   ↓
+开发者审一遍, 修正不确定的、补 Agent 检测不到的（如部署目标 URL）
+   ↓
+git commit "chore: 接入 issuepowers"
+   ↓
+之后 /solve 直接读 config, 不再需要重新探测
+```
+
+`/issuepowers init` 不是必须 —— 手写 config.yaml 也行，init 只是 onboarding 加速器。
+
+### v0 → v1 升级路径
+
+| 步骤 | 内容 |
+|---|---|
+| v0 (当前) | skill 硬编码 process-manage-ai-workflow 栈作参考；只服务该项目 |
+| v1 schema 定稿 | 写出完整 config schema（本节 v1 schema 草案）|
+| v1 init 命令 | 实现 `/issuepowers init`（P3 命令）|
+| v1 skill 重构 | 各 skill 替换 hardcoded `backend` / `web` / `flask db` 为 `<config.X>` 占位 |
+| v1 模板更新 | rollback.md 等模板用 dict-by-module 而非固定 backend / web |
+| v1 试金石 | 用 process-manage-ai-workflow 作首个 config-driven 项目验证 |
+
+### Layered config（未来如有需要）
+
+| Layer | 来源 | 用途 |
+|---|---|---|
+| 1 | issuepowers plugin defaults | 通用规约（merge --no-ff、commit msg 格式等）|
+| 2 | 项目 `.issuepowers/config.yaml` | **核心**（项目栈）|
+| 3 | issue 内 understanding.md 临时声明 | 单 issue 临时覆盖（如临时拉第三方 repo）|
+
+v1 仅做 Layer 2。Layer 1 / 3 等真有需要再加。
+
+### 配置不齐时的索取
+
+config.yaml 缺字段 / 字段值无效 → Agent 在 `/solve` 阶段先核对，缺什么就问用户：
+
+- `tests.acceptance_run` 缺 → 「这个项目的 acceptance 测试怎么跑？」
+- `deploy.poll_endpoint` 缺 → 「部署完成怎么知道？哪个 endpoint 能看到 commit SHA？」
+- 某个 module 的 `path` 不存在 → 「config 里 backend 指向 process-manage-backend，但这个目录不存在，是否搞错了路径？」
+
+不让 Agent 凭空脑补，遵循 understanding 阶段「不确定就问用户」的核心原则。
+
+### 跟 §1 范围对齐
+
+config schema 只覆盖**开发工程化领域**（modules / migration / deploy / tests / commit）。不延伸非工程化（沟通、调研、设计），那些归其他 skill。
