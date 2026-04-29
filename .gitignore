@@ -10,3 +10,4 @@ __pycache__/
 .env
 .env.local
 .merge-lock
+docs/TEST-REPORT.md
