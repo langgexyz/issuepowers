@@ -1,0 +1,31 @@
+{
+  "name": "issuepowers",
+  "version": "0.1.0",
+  "description": "Issue-driven workflow on top of superpowers (开发工程化领域)",
+  "author": {
+    "name": "langgexyz"
+  },
+  "depends_on": ["superpowers"],
+  "provides": {
+    "commands": [
+      "solve",
+      "rollback"
+    ],
+    "skills": [
+      "issuepowers:orchestration",
+      "issuepowers:requirements-understanding",
+      "issuepowers:deliverable-check",
+      "issuepowers:rollback"
+    ],
+    "hooks": [
+      "SessionStart"
+    ],
+    "templates": [
+      "understanding.md",
+      "split-proposal.md",
+      "user-validation-feedback.md",
+      "deliverable-report.md",
+      "rollback.md"
+    ]
+  }
+}

@@ -12,23 +12,12 @@
 import re, sys
 from pathlib import Path
 
-# Minimal YAML-like parser for plugin.yaml structure (no yaml module dep)
+import json
+
 def parse_provides(text):
-    """Extract provides.{commands,skills,templates,hooks} lists from plugin.yaml-style text."""
-    result = {"commands": [], "skills": [], "templates": [], "hooks": []}
-    section = None
-    for line in text.splitlines():
-        m = re.match(r"^  (commands|skills|templates|hooks):\s*$", line)
-        if m:
-            section = m.group(1)
-            continue
-        if section and re.match(r"^    - ", line):
-            result[section].append(line[6:].strip())
-        elif re.match(r"^[a-z]", line) or re.match(r"^  [a-z]", line):
-            # New top-level or second-level non-list line — exit current section
-            if not re.match(r"^  (commands|skills|templates|hooks):\s*$", line):
-                section = None
-    return result
+    """Extract provides.{commands,skills,templates,hooks} from plugin.json."""
+    data = json.loads(text)
+    return data.get("provides", {})
 
 ROOT = Path(__file__).parent.parent
 PASS, FAIL, WARN = [], [], []
@@ -40,8 +29,8 @@ def section(t): print(f"\n=== {t} ===")
 
 
 # === Test 1: plugin manifest 引用完整性 ===
-section("Test 1: plugin.yaml 引用完整性")
-provides = parse_provides((ROOT / ".claude-plugin/plugin.yaml").read_text())
+section("Test 1: plugin.json 引用完整性")
+provides = parse_provides((ROOT / ".claude-plugin/plugin.json").read_text())
 
 for cmd in provides.get("commands", []):
     p = ROOT / f"commands/{cmd}.md"
