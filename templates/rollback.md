@@ -6,9 +6,12 @@
 
 issue: <ISSUE-ID>
 
+merge_strategy: merge-no-ff   # 决定 rollback 用 git revert -m 1 (mainline parent)
+                              # design.md §2 原则 6: 一律 --no-ff, 不允许 squash
+
 merge_sha:
-  backend: <sha>
-  web: <sha>
+  backend: <merge-commit-sha>
+  web: <merge-commit-sha>
 
 ai_workflow_pointer_before: <sha>
 

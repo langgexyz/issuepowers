@@ -111,13 +111,24 @@ flask db downgrade <migration_revision.before>
 
 If migration is destructive (data loss): cross-reference with `notes` field for backup location. Restore from backup BEFORE downgrade if backup exists. If no backup and irreversible, **STOP** and escalate — destructive rollback should never silently lose data.
 
-#### R4. Revert backend
+#### R4. Revert backend (主 worktree)
 
+操作必须在**主 worktree 的 submodule** 内（per-issue worktree 永远不动 develop，design.md §9 并行隔离）。
+
+```bash
+cd <main_worktree>/<backend-submodule>
+git checkout develop
+git pull origin develop
+
+# merge_strategy 字段决定 revert 语法 (rollback.md 里读)
+# merge-no-ff (默认 + 唯一支持): -m 1 指定 mainline parent
+git revert -m 1 <merge_sha.backend> --no-edit
+git push origin develop
 ```
-git -C <backend-submodule-path> checkout develop
-git -C <backend-submodule-path> revert <merge_sha.backend> --no-edit
-git -C <backend-submodule-path> push origin develop
-```
+
+push 失败处理：
+- 远端有新 commit → `git pull --rebase` + 重试 1 次
+- 仍失败 → escalate（**永不** force push，design.md §2 原则 7）
 
 #### R5. Revert web (if applicable)
 

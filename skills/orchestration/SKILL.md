@@ -17,7 +17,7 @@ Top-level driver for issuepowers. Routes by mode.
 |---|---|---|
 | `solve` | `/solve <id>` command | P0 ✅ — covers up to confirmed understanding |
 | `implement` | After `solve` returns in-progress | P1 ✅ — drives superpowers 闭环 + cross-issue conflict + rollback rehearsal |
-| `merge` | After self-review pass | P1 ✅ — `.merge-lock` + squash + tag + submodule pointer |
+| `merge` | After self-review pass | P1 ✅ — `.merge-lock` + `merge --no-ff` + tag + submodule pointer |
 | `deploy-check` | After merge + cron deploy | P1 ✅ — calls `issuepowers:deliverable-check`, handles signals |
 | `fix-forward` | User reports minor validation failure | P1 ✅ — append user-validation-feedback to understanding, restart from plan |
 | `rollback` | `/rollback <id>` command | P1 ✅ — wraps `issuepowers:rollback` execute mode |
@@ -241,10 +241,15 @@ before merge**. Serial via `.merge-lock` to keep develop linear and revertable.
 - All `plan.md` checkboxes done
 - Type / lint / unit tests green
 - Acceptance tests written: `tests/acceptance/<gitee_id>/` exists, one test per `## 关键行为`
+- All commits on feature branch follow `<type>(<gitee_id>): <subject>` convention (design.md §2 原则 6)
 - Cross-issue conflict check: passed (no overlap with other in-flight issues' files)
-- Rollback rehearsal: passed (scratch squash + revert + smoke succeeded)
+- Rollback rehearsal: passed (scratch worktree: `git merge --no-ff` + `git revert -m 1` + smoke succeeded)
 
 If any pre-condition unmet, **do NOT enter merge mode** — escalate.
+
+### Where operations happen
+
+**所有对 develop 的操作都在主 worktree 的 submodule 内进行**。Per-issue worktree (`worktrees/<gitee_id>/`) 永远不 checkout develop —— 它只在 `feature/<gitee_id>-<slug>` 分支上工作。这把「实施期工作区」和「合并到 develop」物理隔离，防止误推。
 
 ### Inputs
 
@@ -278,80 +283,106 @@ trap 'rm -f .merge-lock' EXIT
 
 If acquire fails (live competing merge), surface to user — do NOT auto-wait silently. The user decides whether to queue or pause.
 
-### Step 2 — Pre-merge tags
+### Step 2 — Pre-merge tags（主 worktree submodule）
 
-For each submodule:
+For each submodule, in **主 worktree's submodule path**:
 
 ```bash
-git -C <submodule_path> fetch origin develop
+cd <main_worktree>/<submodule_name>
+git fetch origin
 TS=$(date +%s)
-git -C <submodule_path> tag pre-merge/<gitee_id>-$TS origin/develop
-git -C <submodule_path> push origin pre-merge/<gitee_id>-$TS
+git tag pre-merge/<gitee_id>-$TS origin/develop
+git push origin pre-merge/<gitee_id>-$TS
 ```
 
-These tags lock down "where develop was just before this merge" — anchors for rollback verification.
+Tag 锁定「merge 之前 origin/develop 在哪儿」—— rollback 验证锚点。
 
-### Step 3 — Generate rollback.md (must succeed)
+### Step 3 — Merge --no-ff（拿真实 MERGE_SHA）
 
-Call `issuepowers:rollback` skill in `generate` mode. Pass:
-- `gitee_id`
-- Computed merge SHAs (dry-run squash to capture)
-- Pre-merge tag names from Step 2
-- Migration revisions (before / after)
-- Feature flag (if any)
-
-If generation fails (missing fields, can't compute SHAs): **abort merge, release lock**. Do NOT proceed.
-
-A bad/incomplete rollback.md is worse than no merge — false safety beats no safety.
-
-### Step 4 — Squash merge each submodule
-
-For each submodule:
+For each submodule, **仍在主 worktree submodule 内**:
 
 ```bash
-cd <submodule_path>
+cd <main_worktree>/<submodule_name>
 git checkout develop
-git pull origin develop                        # ensure up-to-date
-git merge --squash feature/<gitee_id>-<slug>
-```
+git pull origin develop                        # sync local develop with origin
 
-Compose commit message:
+# 写 merge commit message
+cat > /tmp/merge-msg-<gitee_id> <<EOF
+merge(<gitee_id>): <slug, human-readable summary>
 
-```
-feat(<gitee_id>): <slug, human-readable summary>
-
-<bullet list from understanding.md 关键行为>
+- <bullet list from understanding.md 关键行为>
 
 Rollback playbook: docs/superpowers/issues/<gitee_id>/rollback.md
+EOF
+
+# 关键: --no-ff 强制创建 merge commit, feature 的 N 个 commit 全部保留可见
+git merge --no-ff feature/<gitee_id>-<slug> -F /tmp/merge-msg-<gitee_id>
+
+MERGE_SHA[<submodule>]=$(git rev-parse HEAD)
 ```
 
-Commit:
+约束：
+- **必须** `--no-ff`（design.md §2 原则 6），不允许 squash 或 fast-forward
+- **必须** 用 `(<gitee_id>)` scope 的 message（自动 grep 可定位）
 
-```bash
-git commit -F .git/COMMIT_EDITMSG_<gitee_id>
+如果 merge 冲突：cross-issue conflict check 应该已经抓住，到这一步算 process violation —— **abort，release lock，escalate**。
+
+### Step 4 — Generate rollback.md（用真实 MERGE_SHA）
+
+merge 已经创造了真 SHA，**现在**调 `issuepowers:rollback` 的 `generate` mode：
+
+```yaml
+gitee_id: <gitee_id>
+merge_strategy: merge-no-ff   # 决定 rollback 用 git revert -m 1
+merge_sha:
+  backend: <real-merge-sha>
+  web: <real-merge-sha>
+ai_workflow_pointer_before: <主仓 main 当前 SHA>
+pre_merge_tags:
+  backend: pre-merge/<gitee_id>-$TS
+  web: pre-merge/<gitee_id>-$TS
+migration_revision:
+  before: <alembic-rev-before>
+  after: <alembic-rev-after>
+feature_flag: <name 或 null>
 ```
 
-If squash conflicts: **abort, release lock, escalate** (cross-issue conflict check should have caught this; if slipped through, that's a bug in the check).
-
-### Step 5 — Push to develop
+如果生成失败（字段缺、模板异常）：**abort**。撤销刚才的本地 merge：
 
 ```bash
+# 不能 reset --hard (违反 §2 原则 7)
+# 用 revert 创造反向 commit, 历史完整
+git revert -m 1 HEAD --no-edit
+```
+
+撤销后 release lock，escalate。本地 develop 会有 merge + revert 的对子（不 push 出去就不影响别人），下次 merge 重试时 `git pull --rebase` 会处理掉这对（origin 上没这两个 commit）。
+
+### Step 5 — Push develop
+
+```bash
+cd <main_worktree>/<submodule_name>
 git push origin develop
 ```
 
-If rejected (concurrent push):
-- `git pull --rebase`
-- `git push origin develop` (one retry)
-- Still fails → abort, release lock, escalate
+失败处理：
+
+| 失败原因 | 处理 |
+|---|---|
+| 远端有新 commit (rejected non-fast-forward) | `git pull --rebase origin develop` 后重试 1 次 |
+| 重试仍失败 | `git revert -m 1 HEAD --no-edit` (撤回 merge 创建反向 commit), `git push origin develop` (推 revert), abort, escalate |
+| 网络 / 认证错误 | escalate, 不自动重试 (可能凭据过期) |
+
+**不允许** `git reset` / `git push --force` 任何形式。
 
 ### Step 6 — Post-merge tags
 
 ```bash
+cd <main_worktree>/<submodule_name>
 git tag deployed/<gitee_id>-$TS develop
 git push origin deployed/<gitee_id>-$TS
 ```
 
-This sha must match the `merge_sha` field captured in rollback.md from Step 3.
+deployed tag 的 SHA = rollback.md 里 `merge_sha[<submodule>]` 字段，必须一致。
 
 ### Step 7 — Update ai-workflow submodule pointers
 
@@ -402,21 +433,25 @@ Hand off to `deploy-check` mode (orchestration enters the next mode automaticall
 |---|---|---|
 | 1 | Lock held by alive PID | Surface to user, no auto-wait |
 | 1 | Stale lock | Clean + retry once |
-| 3 | rollback.md gen fail | Abort, release lock |
-| 4 | Squash conflict | Abort, release lock, escalate (process-violation flag) |
-| 5 | Push rejected | Rebase + retry once; persist fail → escalate |
-| 6 | Tag push fail | Retry once, then escalate |
-| 7 | Submodule pointer commit/push fail | Roll back step 4-6 (revert squash on develop), release lock, escalate |
-| 8 | Cannot read other in-flight issues | Continue, log warning (incomplete rollback graph) |
+| 3 | merge 冲突 | Process violation (cross-issue check 应该抓), abort, escalate |
+| 4 | rollback.md gen fail | `git revert -m 1 HEAD --no-edit` (本地撤回 merge), abort, release lock |
+| 5 | Push rejected (non-ff) | `git pull --rebase` + 重试 1 次; 仍失败则 `git revert -m 1` + push revert, escalate |
+| 5 | 网络/认证错 | Escalate (不自动重试) |
+| 6 | Tag push fail | 重试 1 次, 仍失败 escalate |
+| 7 | Submodule pointer commit/push fail | 用 `git revert -m 1` 撤回各 submodule develop 上的 merge, release lock, escalate |
+| 8 | 读其他 in-flight issues 失败 | Continue, 标 warning (rollback graph 不完整, 后续 manual review) |
 
 ### Anti-patterns
 
 - ❌ Hold `.merge-lock` for > 60s (refactor or split if longer)
-- ❌ Force push under any circumstance
-- ❌ Skip Step 3 (rollback.md generation) — false safety
+- ❌ `git push --force[-with-lease]` under ANY circumstance
+- ❌ `git reset --hard <任何 ref>` —— design.md §2 原则 7 已禁
+- ❌ Skip Step 4 (rollback.md generation) — false safety
 - ❌ Skip Step 8 (dependent commits update) — silently breaks rollback for siblings
 - ❌ Continue past any failed step — must abort
-- ❌ Merge commit instead of squash (revert wouldn't be clean)
+- ❌ `git merge --squash` —— design.md §2 原则 6 禁，必须 --no-ff 留全 commit 历史
+- ❌ Per-issue worktree 内 checkout develop —— 主 worktree 才操作 develop
+- ❌ Merge message 缺 `(<gitee_id>)` scope —— 违反 §2 原则 6
 
 ---
 
@@ -581,6 +616,7 @@ Both directions must run cleanly. If downgrade fails or loses data unsafely: BLO
 - Unit tests pass (`pnpm test`, `pytest`, etc.)
 - Acceptance test count ≥ count of `## 关键行为` lines in understanding.md
 - Diff size sanity: warn at > 1000 lines, **block at > 5000 lines** (scope ballooned, should have been split)
+- **Commit message convention** (design.md §2 原则 6): `git log develop..feature/<gitee_id>-<slug> --pretty=%s` 输出每行必须匹配 `^[a-z]+\(<gitee_id>\): ` —— 任意一行不符合就 BLOCK，让 Agent 改 message（`git rebase -i` 或在 plan 阶段加 commit-msg hook）
 
 ### On all D phases pass
 
