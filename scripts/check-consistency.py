@@ -14,10 +14,14 @@ from pathlib import Path
 
 import json
 
-def parse_provides(text):
-    """Extract provides.{commands,skills,templates,hooks} from plugin.json."""
-    data = json.loads(text)
-    return data.get("provides", {})
+def discover_provides():
+    """Auto-discover plugin contents from directory structure (matches Claude Code convention)."""
+    return {
+        "commands": [p.stem for p in (ROOT / "commands").glob("*.md")],
+        "skills": [f"issuepowers:{p.parent.name}" for p in (ROOT / "skills").glob("*/SKILL.md")],
+        "templates": [p.name for p in (ROOT / "templates").glob("*.md")],
+        "hooks": [p.stem for p in (ROOT / "hooks").glob("*.md")] if (ROOT / "hooks").exists() else [],
+    }
 
 ROOT = Path(__file__).parent.parent
 PASS, FAIL, WARN = [], [], []
@@ -28,9 +32,9 @@ def warn(msg): WARN.append(msg);  print(f"\033[33m⚠️ \033[0m {msg}")
 def section(t): print(f"\n=== {t} ===")
 
 
-# === Test 1: plugin manifest 引用完整性 ===
-section("Test 1: plugin.json 引用完整性")
-provides = parse_provides((ROOT / ".claude-plugin/plugin.json").read_text())
+# === Test 1: 目录自动发现的内容完整性 ===
+section("Test 1: 目录自动发现的内容完整性 (commands / skills / templates / hooks)")
+provides = discover_provides()
 
 for cmd in provides.get("commands", []):
     p = ROOT / f"commands/{cmd}.md"
