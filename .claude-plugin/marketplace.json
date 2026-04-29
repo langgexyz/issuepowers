@@ -1,0 +1,14 @@
+{
+  "name": "issuepowers-marketplace",
+  "owner": {
+    "name": "langgexyz"
+  },
+  "plugins": [
+    {
+      "name": "issuepowers",
+      "description": "Issue-driven workflow framework on top of superpowers (开发工程化领域)",
+      "version": "0.1.0",
+      "source": "."
+    }
+  ]
+}

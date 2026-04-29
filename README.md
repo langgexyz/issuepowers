@@ -18,33 +18,56 @@
 1. **理解 confirm** —— Agent 把需求复述给你，你点头或纠错
 2. **验收** —— Agent 跑完 acceptance test 通过后通知你，你确认 / fix-forward / rollback
 
+## 安装
+
+### 推荐：通过 marketplace 安装（标准做法）
+
+在 Claude Code 会话内：
+
+```
+/plugin marketplace add langgexyz/issuepowers
+/plugin install issuepowers@issuepowers-marketplace
+```
+
+这跟装 superpowers 的方式同源，零额外配置，团队成员各自跑一遍同样命令即可。
+
+后续升级：
+
+```
+/plugin marketplace update issuepowers-marketplace
+```
+
+### 替代：源码 alias 安装（开发者迭代）
+
+适合自己改 issuepowers 源码的场景，git pull 即生效：
+
+```bash
+git clone https://github.com/langgexyz/issuepowers.git ~/.local/share/issuepowers
+echo "alias claude='claude --plugin-dir ~/.local/share/issuepowers'" >> ~/.zshrc
+source ~/.zshrc
+```
+
+### 依赖
+
+issuepowers 依赖 [superpowers](https://github.com/obra/superpowers)，需先装：
+
+```
+/plugin marketplace add obra/superpowers-marketplace
+/plugin install superpowers@superpowers-marketplace
+```
+
 ## 快速开始
 
 ```bash
-# 1. 克隆本仓库
-git clone https://github.com/langgexyz/issuepowers.git
-cd issuepowers
-
-# 2. 加 shell alias (持久化, zsh)
-echo "alias claude='claude --plugin-dir $(pwd)'" >> ~/.zshrc
-source ~/.zshrc
-
-# 3. 启动 Claude Code (在你的项目目录, 不是 issuepowers 仓库)
+# 1. 在你的开发项目目录里启动 Claude Code
 cd /path/to/your-dev-project
 claude
 
-# 4. 验证安装 (Claude Code 会话内)
+# 2. Claude Code 会话内验证
 /help                              # 应看到 /solve 和 /rollback
-/issuepowers:orchestration         # 主 skill 应可触发
 
-# 5. 解决一个 issue
+# 3. 解决一个 issue
 /solve IJG6FV scan-confirm
-```
-
-依赖：`superpowers` 需通过 marketplace 已经安装：
-
-```
-/plugin install superpowers@superpowers-marketplace
 ```
 
 ## 命令
